@@ -1,5 +1,182 @@
 ---
-title: "RAPORT"
-output: html_document
+title: "Czas nauki, frekwencja i motywacja a wynik egzaminu"
+subtitle: "Analiza danych Student Performance Factors"
+lang: pl
+output:
+  html_document:
+    toc: true
+    number_sections: true
+    code_folding: hide
+    self_contained: true
 ---
 
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, fig.width = 8, fig.height = 4.3, dpi = 120)
+options(OutDec = ",")
+tabela <- function(x) knitr::kable(x, digits = 2, row.names = FALSE)
+p_tekst <- function(p) ifelse(p < 0.001, "< 0,001", formatC(p, digits = 3, format = "f"))
+```
+
+# Wprowadzenie
+
+Czy wynik egzaminu silniej wiąże się z obecnością na zajęciach, czy z czasem poświęconym na naukę? Czy uczniowie o wysokiej motywacji uzyskują przeciętnie więcej punktów niż pozostali? Badamy te zależności na podstawie zbioru *Student Performance Factors*. Jeden wiersz opisuje jednego ucznia. Zmienną objaśnianą jest wynik egzaminu w punktach. Analizujemy frekwencję w procentach, tygodniowy czas nauki w godzinach i trzy poziomy motywacji.
+
+Jednostką interpretacji jest uczeń z analizowanego zbioru. Plik nie dokumentuje sposobu doboru próby, kraju ani identyfikatorów szkół. Ogranicza to możliwość uogólnienia wyników na konkretną populację.
+
+# Przygotowanie danych
+
+```{r import}
+surowe <- read.csv("StudentPerformanceFactors.csv", na.strings = c("", "NA"),
+                   strip.white = TRUE, stringsAsFactors = FALSE)
+braki <- colSums(is.na(surowe))
+tabela(data.frame(Zmienna = names(braki[braki > 0]),
+                  Braki = unname(braki[braki > 0]),
+                  Procent = 100 * unname(braki[braki > 0]) / nrow(surowe)))
+```
+
+Plik zawiera **6607 wierszy i 20 kolumn**. Łącznie występuje 235 brakujących pól. Braki dotyczą jakości nauczyciela, wykształcenia rodziców i odległości od domu. Do odpowiedzi na pytania badawcze wybieramy cztery kompletne kolumny. Dzięki temu wykorzystujemy wszystkich uczniów, bez uzupełniania braków w pozostałych zmiennych.
+
+```{r porzadkowanie}
+dane <- data.frame(wynik = surowe$Exam_Score, frekwencja = surowe$Attendance,
+                   nauka = surowe$Hours_Studied,
+                   motywacja = factor(surowe$Motivation_Level,
+                     levels = c("Low", "Medium", "High"),
+                     labels = c("Niska", "Średnia", "Wysoka"), ordered = TRUE))
+stopifnot(all(complete.cases(dane)), all(dane$frekwencja >= 0 & dane$frekwencja <= 100),
+          all(dane$nauka >= 0))
+tabela(data.frame(Kontrola = c("Identyczne pełne wiersze", "Wyniki powyżej 100 pkt"),
+                  Liczba = c(sum(duplicated(surowe)), sum(dane$wynik > 100))))
+```
+
+Nie wykryto identycznych wierszy. Jeden uczeń uzyskał 101 punktów. Bez potwierdzenia maksymalnej liczby punktów zachowujemy wartość źródłową. W części poświęconej testom powtarzamy analizę bez tej obserwacji.
+
+# Analiza opisowa
+
+```{r opis}
+opis <- function(x) c(length(x), mean(x), sd(x), min(x), unname(quantile(x, 0.25)),
+                      median(x), unname(quantile(x, 0.75)), max(x))
+stat <- as.data.frame(t(vapply(dane[c("wynik", "frekwencja", "nauka")], opis, numeric(8))))
+names(stat) <- c("N", "Średnia", "Odch. std.", "Min", "Q1", "Mediana", "Q3", "Maks")
+tabela(cbind(Miara = c("Wynik (pkt)", "Frekwencja (%)", "Nauka (godz./tydz.)"), stat))
+```
+
+Średni wynik wynosi **67,24 pkt**, a środkowa połowa wyników mieści się między **65 a 69 pkt**. Typowy uczeń w sensie mediany uczył się 20 godzin tygodniowo i uczestniczył w 80% zajęć. Frekwencja w tej próbie zaczyna się od 60%, więc dane nie opisują uczniów z bardzo niską obecnością.
+
+```{r grupy}
+grupy <- split(dane$wynik, dane$motywacja)
+tabela(data.frame(Motywacja = names(grupy), N = lengths(grupy),
+                  Średnia = sapply(grupy, mean), Mediana = sapply(grupy, median),
+                  Odchylenie = sapply(grupy, sd)))
+```
+
+Najliczniejsza jest grupa o średniej motywacji (3351 uczniów). Średnie rosną wraz z poziomem motywacji, ale różnica między skrajnymi grupami wynosi mniej niż jeden punkt.
+
+# Wizualizacja danych
+
+```{r histogram, fig.cap="Rys. 1. Rozkład wyników egzaminu. Pionowa linia wskazuje medianę."}
+hist(dane$wynik, breaks = seq(min(dane$wynik)-0.5, max(dane$wynik)+0.5, 1),
+     col = "#458982", border = "white", main = "", xlab = "Wynik egzaminu (pkt)",
+     ylab = "Liczba uczniów")
+abline(v = median(dane$wynik), col = "#9B4626", lwd = 2, lty = 2)
+```
+
+Najwięcej wyników skupia się wokół 67 punktów. Po prawej stronie widać nieliczne wysokie wyniki, daleko od środka rozkładu.
+
+```{r zaleznosci, fig.cap="Rys. 2. Wynik a frekwencja i czas nauki. Linie przedstawiają osobne trendy liniowe."}
+par(mfrow = c(1, 2), mar = c(4, 4, 1, 0.6))
+for (zm in c("frekwencja", "nauka")) {
+  x <- dane[[zm]]
+  podpis <- if (zm == "frekwencja") "Frekwencja (%)" else "Nauka (godz./tydz.)"
+  plot(x, dane$wynik, pch = 16, cex = 0.65, col = rgb(0.08, 0.35, 0.46, 0.16),
+       xlab = podpis, ylab = "Wynik egzaminu (pkt)")
+  abline(lm(dane$wynik ~ x), col = "#9B4626", lwd = 2)
+}
+```
+
+Obie linie trendu rosną. Dla tej samej frekwencji lub liczby godzin wyniki uczniów są zróżnicowane. Siłę związku porównujemy za pomocą korelacji, ponieważ zmienne na osiach poziomych mają różne jednostki.
+
+```{r pudelka, fig.cap="Rys. 3. Rozkład wyników według motywacji. Romby wskazują średnie."}
+boxplot(wynik ~ motywacja, data = dane, col = c("#DBEBEC", "#96C7C6", "#559A98"),
+        xlab = "Poziom motywacji", ylab = "Wynik egzaminu (pkt)", outcex = 0.45)
+points(seq_along(grupy), sapply(grupy, mean), pch = 18, col = "#9B4626", cex = 1.4)
+```
+
+Pudełka w dużej części się pokrywają. Uczniowie o różnych poziomach motywacji często osiągają podobne wyniki, mimo uporządkowania średnich grupowych.
+
+# Wnioskowanie statystyczne
+
+Przyjmujemy poziom istotności 0,05. Każdy wiersz traktujemy jako niezależną obserwację. Brak identyfikatorów klas i szkół uniemożliwia sprawdzenie zależności między uczniami tej samej klasy. Podane przedziały ufności i wartości *p* należy interpretować przy tym założeniu.
+
+## Frekwencja i czas nauki
+
+Dla każdej zmiennej hipoteza zerowa zakłada zerową korelację liniową z wynikiem egzaminu, a alternatywna — korelację różną od zera. Wykresy uzasadniają opis trendem liniowym. Obliczamy korelacje Pearsona, dwustronne testy i 95-procentowe przedziały ufności. Korelacja rang Spearmana pokazuje dodatkowo, czy kierunek związku utrzymuje się po zastąpieniu wartości rangami.
+
+```{r korelacje}
+korelacje <- function(d) {
+  oblicz <- function(x) {
+    test <- cor.test(x, d$wynik, method = "pearson")
+    c(unname(test$estimate), test$conf.int[1], test$conf.int[2],
+      cor(x, d$wynik, method = "spearman"), test$p.value)
+  }
+  tab <- as.data.frame(t(vapply(d[c("frekwencja", "nauka")], oblicz, numeric(5))))
+  names(tab) <- c("Pearson r", "Dolna 95%", "Górna 95%", "Spearman rho", "p")
+  tab$p <- p_tekst(tab$p)
+  cbind(Zmienna = c("Frekwencja", "Godziny nauki"), tab)
+}
+tabela(korelacje(dane))
+```
+
+Dla obu zmiennych odrzucamy hipotezę zerową. W próbie frekwencja ma wyższą korelację z wynikiem (**r = 0,58**) niż godziny nauki (**r = 0,45**). To porównanie dwóch oszacowań. Przeprowadzone testy oceniają każdy związek osobno.
+
+## Poziom motywacji
+
+Hipoteza zerowa zakłada równe średnie wyniki we wszystkich trzech grupach. Według hipotezy alternatywnej co najmniej jedna średnia jest inna. Stosujemy analizę wariancji Welcha, która dopuszcza różne wariancje i liczebności grup. Duże liczebności sprzyjają stabilności oszacowań średnich. Po teście ogólnym porównujemy grupy parami dwustronnymi testami t Welcha i stosujemy korektę Holma dla trzech porównań.
+
+```{r anova}
+test_w <- oneway.test(wynik ~ motywacja, data = dane)
+tabela(data.frame(F = unname(test_w$statistic), df1 = unname(test_w$parameter[1]),
+                  df2 = unname(test_w$parameter[2]), p = p_tekst(test_w$p.value)))
+```
+
+```{r pary}
+pary <- combn(names(grupy), 2, simplify = FALSE)
+porownania <- do.call(rbind, lapply(pary, function(para) {
+  a <- grupy[[para[1]]]
+  b <- grupy[[para[2]]]
+  test <- t.test(b, a)
+  data.frame(Porównanie = paste(para[2], "−", para[1]), Różnica_pkt = mean(b)-mean(a),
+             Dolna_95 = test$conf.int[1], Górna_95 = test$conf.int[2], p = test$p.value)
+}))
+porownania$p_Holma <- p_tekst(p.adjust(porownania$p, method = "holm"))
+tabela(porownania[names(porownania) != "p"])
+```
+
+Test ogólny wskazuje na różnice średnich. Po korekcie Holma wszystkie trzy porównania pozostają istotne. Grupa o wysokiej motywacji osiągnęła średnio **0,95 pkt** więcej od grupy o niskiej motywacji. Dla porównania odchylenie standardowe wyników wszystkich uczniów wynosi **3,89 pkt**. Różnica między średnimi jest więc niewielka względem zróżnicowania indywidualnego. Przedziały w tabeli są indywidualnymi przedziałami dla par. Korekta Holma dotyczy wartości *p*.
+
+## Czy wynik 101 pkt zmienia wnioski?
+
+```{r wrazliwosc}
+bez_101 <- subset(dane, wynik <= 100)
+tabela(korelacje(bez_101))
+srednie <- tapply(bez_101$wynik, bez_101$motywacja, mean)
+tabela(data.frame(N = nrow(bez_101),
+                  Wysoka_minus_niska = unname(srednie["Wysoka"] - srednie["Niska"]),
+                  p_Welcha = p_tekst(oneway.test(wynik ~ motywacja, data = bez_101)$p.value)))
+```
+
+Po pominięciu jednej obserwacji frekwencja nadal wykazuje silniejszą korelację z wynikiem niż czas nauki. Różnica średnich między skrajnymi grupami motywacji pozostaje mniejsza od jednego punktu, a test ogólny nadal wskazuje na zróżnicowanie średnich.
+
+# Wnioski końcowe
+
+1. **Frekwencja** była najsilniej związana z wynikiem spośród dwóch badanych zmiennych liczbowych. Uczniowie częściej obecni na zajęciach przeciętnie uzyskiwali więcej punktów.
+2. **Czas nauki** również wykazywał dodatnią zależność z wynikiem. Rozrzut punktów pokazuje, że przy tej samej liczbie godzin uczniowie osiągali różne rezultaty.
+3. **Motywacja** różnicowała średnie w sposób statystycznie istotny, ale skala różnic była mała. Średnia wzrosła z 66,75 pkt w grupie o niskiej motywacji do 67,70 pkt w grupie o wysokiej motywacji.
+
+Analiza opisuje zależności w dostępnym zbiorze. Porównania nie uwzględniają jednocześnie wcześniejszych ocen, dostępu do zasobów ani innych cech uczniów. Na ich podstawie nie można określić, ile punktów konkretny uczeń zyska po dodatkowej godzinie nauki. Dalsza analiza mogłaby sprawdzić, czy związek frekwencji z wynikiem utrzymuje się po uwzględnieniu wcześniejszych wyników.
+
+# Źródła i praca zespołowa
+
+- [Zbiór danych Student Performance Factors na Kaggle](https://www.kaggle.com/datasets/lainguyn123/student-performance-factors).
+- [Notebook na Kaggle wskazany przez zespół](https://www.kaggle.com/code/avinashmagar05061998/student-performace-factors/notebook).
+- [Repozytorium projektu](https://github.com/AgataMalej/projekt_analiza_danych_r) zawiera plik CSV, projekt RStudio oraz źródło raportu. Obliczenia można odtworzyć, otwierając projekt i wybierając **Knit → Knit to HTML** w pliku RAPORT.Rmd. Wymagane są pakiety rmarkdown i knitr.
+- [Historia commitów](https://github.com/AgataMalej/projekt_analiza_danych_r/commits/main/) dokumentuje wersje projektu i autorów zmian. W historii przygotowania projektu widnieją m.in. commity konta AgataMalej: fbdf13a (utworzenie repozytorium) oraz c308b76 (dodanie szablonu raportu).
